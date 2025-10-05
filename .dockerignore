@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+.cache/
+.venv/
+venv/
+.env
+.git/
+.gitignore
+*.csv
+*.pth
+*.pt
+*.save
+*.joblib
+.DS_Store
