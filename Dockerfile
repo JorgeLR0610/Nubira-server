@@ -34,6 +34,5 @@ ENV PORT=7860
 # Expose for local run (HF ignores EXPOSE)
 EXPOSE 7860
 
-# Default command for HF Spaces (FastAPI + uvicorn)
-# App module is appPowerFastAPI:app
-CMD ["python", "-m", "uvicorn", "appPowerFastAPI:app", "--host", "0.0.0.0", "--port", "${PORT}"]
+# Default command for HF Spaces: iniciar mediante start.py, que lee PORT en Python
+CMD ["python", "start.py"]
