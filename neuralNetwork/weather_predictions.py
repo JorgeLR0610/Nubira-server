@@ -11,7 +11,13 @@ import os
 # ------------------ Dataset ------------------
 class WeatherDataset(Dataset):
     def __init__(self, csv_file):
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(f"No se encontró el archivo: {csv_file}")
+
         self.data = pd.read_csv(csv_file)
+
+        if self.data.empty:
+            raise ValueError("El archivo CSV está vacío o mal formateado.")
 
         # Variables de entrada
         self.features = self.data[["year", "month", "day"]].values
@@ -51,7 +57,6 @@ class WeatherPrediction(nn.Module):
 
 
 # ------------------ Entrenamiento y Predicción ------------------
-# Caché global por versión del dataset (mtime de datos.csv)
 _CACHED = {
     "model": None,
     "best_state": None,
@@ -60,19 +65,34 @@ _CACHED = {
     "dataset_mtime": None,
 }
 
+
 def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
     """
     Entrena el modelo UNA SOLA VEZ, pero guarda el estado (pesos)
     del batch donde el loss fue más bajo en todo el entrenamiento.
     """
-    # 1️⃣ Cargar dataset y evaluar si debemos re-entrenar (según mtime)
-    dataset_path = "datos.csv"
-    dataset_mtime = os.path.getmtime(dataset_path) if os.path.exists(dataset_path) else None
+
+    # 📍 Buscar el CSV en la raíz del proyecto
+    root_dir = os.path.dirname(os.path.abspath(__file__))  # donde está el script
+    possible_paths = [
+        os.path.join(root_dir, "datos.csv"),                        # mismo folder
+        os.path.join(os.path.dirname(root_dir), "datos.csv"),       # carpeta raíz (un nivel arriba)
+        os.path.join(os.getcwd(), "datos.csv"),                     # directorio actual (por seguridad)
+    ]
+
+    dataset_path = next((p for p in possible_paths if os.path.exists(p)), None)
+
+    if dataset_path is None:
+        raise FileNotFoundError("❌ No se encontró el archivo 'datos.csv' en ningún directorio esperado.")
+
+    if not os.access(dataset_path, os.R_OK):
+        raise PermissionError(f"❌ Sin permisos de lectura para: {dataset_path}")
+
+    dataset_mtime = os.path.getmtime(dataset_path)
     dataset = WeatherDataset(dataset_path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # 2️⃣ Crear modelo, pérdida y optimizador
-    # Si el caché coincide con el mtime actual, reutilizar el mejor estado
+    # 🔁 Reutilizar caché si el dataset no cambió
     reuse_cached = (
         _CACHED["best_state"] is not None and _CACHED["dataset_mtime"] == dataset_mtime
     )
@@ -86,7 +106,6 @@ def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
     best_epoch = 0
     best_batch = 0
 
-    # 3️⃣ Entrenamiento completo (solo si no hay caché válido)
     if not reuse_cached:
         for epoch in range(epochs):
             for batch_idx, (x, y) in enumerate(dataloader):
@@ -96,7 +115,6 @@ def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
                 loss.backward()
                 optimizer.step()
 
-                # ✅ Si este batch tuvo menor pérdida que todas las anteriores
                 if loss.item() < best_loss:
                     best_loss = loss.item()
                     best_epoch = epoch + 1
@@ -104,27 +122,20 @@ def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
                     best_model_state = copy.deepcopy(model.state_dict())
                     print(f"🟢 Nuevo mejor modelo → Época {best_epoch}, Batch {best_batch}, Loss: {best_loss:.6f}")
 
-        # Guardar en caché
         _CACHED["best_state"] = best_model_state
         _CACHED["scaler_x"] = dataset.scaler_x
         _CACHED["scaler_y"] = dataset.scaler_y
         _CACHED["dataset_mtime"] = dataset_mtime
     else:
-        # Recuperar del caché
         best_model_state = _CACHED["best_state"]
-        best_epoch = 0
-        best_batch = 0
-        best_loss = best_loss if best_loss != float("inf") else 0.0
 
-    # 4️⃣ Restaurar el mejor modelo
     model.load_state_dict(best_model_state)
     print(f"✅ Modelo listo (reentrenado={not reuse_cached}). Mejor pérdida: {best_loss:.6f}")
 
-    # 5️⃣ Predicción
+    # Predicción
     x_input = np.array([[year, month, day]])
-    # Usar escaladores del caché si existen (coinciden con mtime)
-    scaler_x = _CACHED["scaler_x"] if reuse_cached and _CACHED["scaler_x"] is not None else dataset.scaler_x
-    scaler_y = _CACHED["scaler_y"] if reuse_cached and _CACHED["scaler_y"] is not None else dataset.scaler_y
+    scaler_x = _CACHED["scaler_x"] if reuse_cached else dataset.scaler_x
+    scaler_y = _CACHED["scaler_y"] if reuse_cached else dataset.scaler_y
 
     x_scaled = scaler_x.transform(x_input)
     x_tensor = torch.tensor(x_scaled, dtype=torch.float32)
