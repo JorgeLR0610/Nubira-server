@@ -73,14 +73,14 @@ def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
     """
 
     # 📍 Buscar el CSV en la raíz del proyecto
-    root_dir = os.path.dirname(os.path.abspath(__file__))  # donde está el script
-    possible_paths = [
-        os.path.join(root_dir, "datos.csv"),                        # mismo folder
-        os.path.join(os.path.dirname(root_dir), "datos.csv"),       # carpeta raíz (un nivel arriba)
-        os.path.join(os.getcwd(), "datos.csv"),                     # directorio actual (por seguridad)
-    ]
+            # Buscar el CSV subiendo un nivel desde la carpeta neuralNetwork
+    # Buscar el CSV subiendo un nivel desde la carpeta neuralNetwork
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(root_dir)
+    dataset_path = os.path.join(project_root, "datos.csv")
 
-    dataset_path = next((p for p in possible_paths if os.path.exists(p)), None)
+    if not os.path.exists(dataset_path):
+        raise FileNotFoundError(f"❌ No se encontró el archivo CSV en {dataset_path}")
 
     if dataset_path is None:
         raise FileNotFoundError("❌ No se encontró el archivo 'datos.csv' en ningún directorio esperado.")
