@@ -100,6 +100,12 @@ def predict_by_date(year, month, day, epochs=80, lr=0.03, batch_size=34):
     y_pred = model(x_tensor).detach().numpy()
     y_real = scaler_y.inverse_transform(y_pred)
 
+    print("x_input:", x_input)
+    print("x_scaled:", x_scaled)
+    print("y_pred:", y_pred)
+    print("y_real:", y_real)
+
+
     return {
         "prediccion": y_real[0].tolist(),
         "mejor_loss": best_loss,
