@@ -11,10 +11,10 @@ import os
 # ------------------ Dataset ------------------
 class WeatherDataset(Dataset):
     def __init__(self, csv_file):
-        if not os.path.exists(r"Nubira\datos.csv"):
+        if not os.path.exists(r"Nubira/datos.csv"):
             raise FileNotFoundError(f"No se encontró el archivo: {csv_file}")
 
-        self.data = pd.read_csv(r"Nubira\datos.csv")
+        self.data = pd.read_csv(r"Nubira/datos.csv")
 
         if self.data.empty:
             raise ValueError("El archivo CSV está vacío o mal formateado.")
