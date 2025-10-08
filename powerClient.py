@@ -44,11 +44,7 @@ def convert_to_csv(api_response, filename='datos.csv', filter_month=None, filter
     
     df = pd.DataFrame(result)
 
-    # ✅ Guardar en la raíz del proyecto (un nivel arriba de neuralNetwork)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    save_path = os.path.join(project_root, filename)
-
+    save_path = os.path.join("/tmp", "datos.csv")
     df.to_csv(save_path, index=False)
     print(f"✅ Archivo CSV creado correctamente en: {save_path}")
 
