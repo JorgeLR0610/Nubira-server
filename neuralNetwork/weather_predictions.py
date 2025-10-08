@@ -77,7 +77,7 @@ def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
     # Buscar el CSV subiendo un nivel desde la carpeta neuralNetwork
 
 
-    dataset = WeatherDataset(dataset_path)
+    dataset = WeatherDataset("datos.csv")
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # 🔁 Reutilizar caché si el dataset no cambió
