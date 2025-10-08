@@ -43,9 +43,4 @@ def convert_to_csv(api_response, filename='datos.csv', filter_month=None, filter
         result.append(daily_dict)
     
     df = pd.DataFrame(result)
-
-    save_path = os.path.join("/tmp", "datos.csv")
-    df.to_csv(save_path, index=False)
-    print(f"✅ Archivo CSV creado correctamente en: {save_path}")
-
     return df
