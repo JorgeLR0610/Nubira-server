@@ -4,7 +4,7 @@ from torch import nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import copy
-from database_operations import read_data
+from .database_operations import read_data
 from sklearn.preprocessing import StandardScaler
 
 class WeatherDatasetSQL(torch.utils.data.Dataset):
