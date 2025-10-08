@@ -11,10 +11,10 @@ import os
 # ------------------ Dataset ------------------
 class WeatherDataset(Dataset):
     def __init__(self, csv_file):
-        if not os.path.exists(csv_file):
+        if not os.path.exists(r"Nubira/datos.csv"):
             raise FileNotFoundError(f"No se encontró el archivo: {csv_file}")
 
-        self.data = pd.read_csv(csv_file)
+        self.data = pd.read_csv(r"Nubira/datos.csv")
 
         if self.data.empty:
             raise ValueError("El archivo CSV está vacío o mal formateado.")
@@ -75,20 +75,8 @@ def predict_by_date(year, month, day, epochs=20, lr=0.03, batch_size=34):
     # 📍 Buscar el CSV en la raíz del proyecto
             # Buscar el CSV subiendo un nivel desde la carpeta neuralNetwork
     # Buscar el CSV subiendo un nivel desde la carpeta neuralNetwork
-    root_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(root_dir)
-    dataset_path = os.path.join(project_root, "datos.csv")
 
-    if not os.path.exists(dataset_path):
-        raise FileNotFoundError(f"❌ No se encontró el archivo CSV en {dataset_path}")
 
-    if dataset_path is None:
-        raise FileNotFoundError("❌ No se encontró el archivo 'datos.csv' en ningún directorio esperado.")
-
-    if not os.access(dataset_path, os.R_OK):
-        raise PermissionError(f"❌ Sin permisos de lectura para: {dataset_path}")
-
-    dataset_mtime = os.path.getmtime(dataset_path)
     dataset = WeatherDataset(dataset_path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
