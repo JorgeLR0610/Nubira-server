@@ -1,7 +1,8 @@
 import sqlite3
 import pandas as pd
 
-DB_PATH = "weather.db"
+
+DB_PATH = "/temp/weather.db"
 TABLE_NAME = "weather_data"
 
 # ------------------ Conexión ------------------
