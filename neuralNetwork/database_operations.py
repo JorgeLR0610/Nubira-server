@@ -3,7 +3,7 @@ import pandas as pd
 import os
 
 # 🌐 Ruta persistente para Hugging Face Spaces
-DB_PATH = "/workspace/weather.db"
+DB_PATH = "/tmp/weather.db"
 TABLE_NAME = "weather_data"
 
 # ------------------ Conexión ------------------
