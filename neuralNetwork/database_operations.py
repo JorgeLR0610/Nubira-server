@@ -73,18 +73,11 @@ def update_data(condition: dict, updates: dict):
     print("✅ Datos actualizados correctamente")
 
 # ------------------ Eliminación ------------------
-def delete_data(condition: dict):
-    """
-    Elimina filas según una condición.
-    condition = {"year": 2025, "month": 1}
-    """
+def delete_data():
     conn = get_connection()
     cursor = conn.cursor()
-
-    condition_str = " AND ".join([f"{k} = ?" for k in condition.keys()])
-    sql = f"DELETE FROM {TABLE_NAME} WHERE {condition_str}"
-    cursor.execute(sql, list(condition.values()))
-
+    sql = f"DELETE FROM {TABLE_NAME}"
+    cursor.execute(sql)
     conn.commit()
     conn.close()
     print("✅ Datos eliminados correctamente")
