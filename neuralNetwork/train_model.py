@@ -9,7 +9,7 @@ import joblib
 # Dataset
 class WeatherDataset(Dataset):
     def __init__(self, csv_file):
-        self.data = pd.read_csv(csv_file)
+        self.data = pd.read_csv(r"Nubira/datos.csv")
 
         # Features: year, monthOfYear, day (día del mes)
         self.features = self.data[["year", "monthOfYear", "day"]].values
