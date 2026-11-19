@@ -234,6 +234,7 @@ def test_optional_geocoder_is_cached_and_not_needed_for_consultation(setup, monk
         assert client.get("/places").json() == {"enabled": False, "autocomplete": False}
         assert client.post("/places", json={"query": "Chihuahua"}).status_code == 503
         assert client.post("/places/autocomplete", json={"query": "Chihuahua"}).status_code == 503
+        assert client.post("/places/reverse", json={"lat": 28.63, "lon": -106.06}).status_code == 503
         monkeypatch.setenv("NUBIRA_GEOCODER_CONTACT", "ops@example.com")
         entered = []
 
@@ -310,6 +311,44 @@ def test_address_provider_errors_are_safe_to_show(setup, monkeypatch):
         assert response.json() == {
             "detail": "No pudimos sugerir direcciones. Puedes usar el mapa o ingresar las coordenadas."
         }
+
+
+def test_reverse_geocoding_returns_only_a_label_and_accepts_no_matches(setup, monkeypatch):
+    monkeypatch.setenv("NUBIRA_GEOAPIFY_API_KEY", "test-only-key")
+    calls = []
+    lookups = iter([
+        [{"properties": {"lat": 28.6302, "lon": -106.061, "formatted": " Avenida Independencia, Chihuahua "}}],
+        [],
+    ])
+
+    class Upstream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _):
+            return json.dumps({"features": next(lookups)}).encode()
+
+    def lookup(request, timeout):
+        calls.append(urlsplit(request.full_url))
+        return Upstream()
+
+    monkeypatch.setattr(places, "urlopen", lookup)
+    with TestClient(appPowerFastAPI.app) as client:
+        for payload in ({"lat": 90.01, "lon": 0}, {"lat": 0, "lon": -181}, {"lat": "0", "lon": 0}):
+            assert client.post("/places/reverse", json=payload).status_code == 422
+        assert calls == []
+        found = client.post("/places/reverse", json={"lat": 28.63, "lon": -106.06})
+        assert found.status_code == 200
+        assert found.json() == {"label": "Avenida Independencia, Chihuahua"}
+        assert (calls[0].netloc, calls[0].path) == ("api.geoapify.com", "/v1/geocode/reverse")
+        assert parse_qs(calls[0].query) == {
+            "lat": ["28.63"], "lon": ["-106.06"], "lang": ["es"], "limit": ["1"],
+            "format": ["geojson"], "apiKey": ["test-only-key"],
+        }
+        assert client.post("/places/reverse", json={"lat": 0, "lon": 0}).json() == {"label": None}
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Verifica señales POSIX de los contenedores.")

@@ -29,6 +29,8 @@ También puedes ejecutar `git lfs pull` para materializar los archivos del repos
 
 Configura `NUBIRA_GEOAPIFY_API_KEY` solo en el entorno de la API y reiníciala. Las sugerencias se consultan en español, priorizan México sin excluir otros países y tienen un límite compartido de 1.000 solicitudes al proveedor por ventana de 24 horas (además del límite de ráfaga). Las direcciones parciales se envían al proveedor y la API no las guarda. Sin clave siguen disponibles el mapa y la entrada manual. La búsqueda opcional compatible con Nominatim conserva su modo de envío explícito: nunca se usa para el autocompletado.
 
+Con la misma clave, un clic del mapa busca la dirección más cercana. La API comparte el límite de solicitudes con el autocompletado y solo devuelve una etiqueta (o `null` si no hay coincidencia); el punto original se utiliza para la evaluación.
+
 ### Correo y reevaluación
 
 Las variables están documentadas en [`.env.example`](.env.example); expórtalas desde el entorno o configúralas en Compose. Usa `file` solo con un origen local, o `smtp` con un origen HTTPS, remitente autorizado y credenciales del proveedor. Por defecto se usa STARTTLS (puerto 587); para TLS implícito, `NUBIRA_SMTP_IMPLICIT_TLS=1` (puerto 465). No subas credenciales ni la bandeja de correo al repositorio.
