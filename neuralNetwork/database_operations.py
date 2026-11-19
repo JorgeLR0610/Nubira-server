@@ -1,21 +1,33 @@
-import sqlite3
-import pandas as pd
 import os
+import sqlite3
+from pathlib import Path
+import pandas as pd
 
-# 🌐 Ruta persistente para Hugging Face Spaces
-DB_PATH = "/tmp/weather.db"
+# 🌐 Ruta persistente para base de datos SQLite (compatible con local, Windows, Linux y HF Spaces)
+BASE_DIR = Path(__file__).resolve().parent.parent
+WORKSPACE_DIR = BASE_DIR / "workspace"
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Usar variable de entorno si existe, o por defecto workspace/weather.db
+DEFAULT_DB = str(WORKSPACE_DIR / "weather.db")
+DB_PATH = os.environ.get("DB_PATH", DEFAULT_DB)
 TABLE_NAME = "weather_data"
+
 
 # ------------------ Conexión ------------------
 def get_connection():
-    """Crea y devuelve la conexión a SQLite, asegurando que la tabla exista."""
-    # Crear carpeta /workspace si no existe
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    """Crea y devuelve la conexión a SQLite, asegurando que el directorio y la tabla existan."""
+    db_file = Path(DB_PATH)
+    try:
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_file))
+    except Exception:
+        # Fallback si no se puede escribir en DB_PATH (ej. /tmp en Windows)
+        fallback_path = WORKSPACE_DIR / "weather.db"
+        fallback_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(fallback_path))
 
-    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    # Crear tabla si no existe
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
             year INTEGER,
@@ -31,6 +43,7 @@ def get_connection():
     conn.commit()
     return conn
 
+
 # ------------------ Inserción ------------------
 def insert_data(df: pd.DataFrame):
     """
@@ -38,18 +51,24 @@ def insert_data(df: pd.DataFrame):
     El DataFrame debe tener las columnas:
     year, month, day, T2M_MAX, T2M_MIN, PRECTOTCORR, PRECSNO, WS2M_MAX
     """
+    if df.empty:
+        return
+
     conn = get_connection()
     cursor = conn.cursor()
 
-    for _, row in df.iterrows():
+    columns = ["year", "month", "day", "T2M_MAX", "T2M_MIN", "PRECTOTCORR", "PRECSNO", "WS2M_MAX"]
+    df_subset = df[[col for col in columns if col in df.columns]]
+
+    for _, row in df_subset.iterrows():
         cursor.execute(f"""
             INSERT INTO {TABLE_NAME} (year, month, day, T2M_MAX, T2M_MIN, PRECTOTCORR, PRECSNO, WS2M_MAX)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, tuple(row))
+        """, tuple(row.get(col, 0.0) for col in columns))
 
     conn.commit()
     conn.close()
-    print("✅ Datos insertados correctamente")
+
 
 # ------------------ Actualización ------------------
 def update_data(condition: dict, updates: dict):
@@ -70,7 +89,7 @@ def update_data(condition: dict, updates: dict):
 
     conn.commit()
     conn.close()
-    print("✅ Datos actualizados correctamente")
+
 
 # ------------------ Eliminación ------------------
 def delete_data():
@@ -80,7 +99,7 @@ def delete_data():
     cursor.execute(sql)
     conn.commit()
     conn.close()
-    print("✅ Datos eliminados correctamente")
+
 
 # ------------------ Lectura ------------------
 def read_data() -> pd.DataFrame:
