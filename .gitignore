@@ -121,11 +121,15 @@ docs/_build/
 .pytype/
 
 # ==============
-# PyTorch / ML artefacts
+# PyTorch / ML artefacts & Datasets
 # ==============
 
-# Ignorar pesos / checkpoints de modelos
+# Ignorar datasets pesados de entrenamiento
+*.nc
+
+# Ignorar checkpoints temporales, pero permitir el modelo final entrenado
 *.pt
+!best_weather_risk_model.pt
 *.pth
 *.ckpt
 
