@@ -137,3 +137,6 @@ docs/_build/
 runs/
 tensorboard_logs/
 logs/
+/artifacts/
+/workspace/nubira.sqlite3*
+/workspace/mail/

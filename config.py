@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 # Directorio raíz del proyecto (el mismo donde viven los scripts y se descarga el .nc)
@@ -6,8 +7,14 @@ PROJECT_DIR = Path(__file__).resolve().parent
 # Rutas automáticas dentro del mismo directorio del proyecto
 DATASET_FILENAME = "clima_diario_global_1980_2022.nc"
 DATASET_PATH = PROJECT_DIR / DATASET_FILENAME
-CONTEXT_PATH = PROJECT_DIR / "climate_context.npz"
-BEST_MODEL_PATH = PROJECT_DIR / "best_weather_risk_model.pt"
+def _artifact_path(env_var: str, filename: str) -> Path:
+    local = PROJECT_DIR / "artifacts" / filename
+    default = local if local.is_file() else PROJECT_DIR / filename
+    return Path(os.environ.get(env_var, default))
+
+
+CONTEXT_PATH = _artifact_path("NUBIRA_CLIMATE_CONTEXT_PATH", "climate_context.npz")
+BEST_MODEL_PATH = _artifact_path("NUBIRA_MODEL_PATH", "best_weather_risk_model.pt")
 
 # Fuente pública en Google Cloud Storage (WeatherBench 2 / ERA5 64x32 cada 6h, 1959 a enero 2023)
 WB2_ZARR_URL = "gs://weatherbench2/datasets/era5/1959-2023_01_10-6h-64x32_equiangular_conservative.zarr"
@@ -42,4 +49,3 @@ VAL_SAMPLES = 60_000
 TEST_SAMPLES = 80_000
 NUM_WORKERS = 4
 SEED = 42
-

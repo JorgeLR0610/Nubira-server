@@ -12,6 +12,13 @@ venv/
 *.csv
 *.pth
 *.pt
+!best_weather_risk_model.pt
+!artifacts/best_weather_risk_model.pt
 *.save
 *.joblib
 .DS_Store
+workspace/
+tmp/
+temp/
+tests/
+*.nc
