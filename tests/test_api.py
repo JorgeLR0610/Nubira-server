@@ -1,15 +1,19 @@
 import json
+import os
 import re
 import select
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
+from threading import Barrier, Event
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,6 +42,11 @@ def sample_prediction(lat, lon, target, *, rain=69.13, days=42):
 
 @pytest.fixture
 def setup(monkeypatch, tmp_path):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("NUBIRA_REQUIRE_POSTGRES", raising=False)
+    monkeypatch.delenv("NUBIRA_MONITOR_INTERVAL", raising=False)
+    monkeypatch.delenv("FRONTEND_URL", raising=False)
+    monkeypatch.delenv("MAIL_PROVIDER", raising=False)
     monkeypatch.setenv("NUBIRA_DB_PATH", str(tmp_path / "test.sqlite3"))
     monkeypatch.setenv("NUBIRA_MAIL_MODE", "file")
     monkeypatch.setenv("NUBIRA_MAIL_DIR", str(tmp_path / "mail"))
@@ -45,7 +54,24 @@ def setup(monkeypatch, tmp_path):
     monkeypatch.delenv("NUBIRA_GEOCODER_CONTACT", raising=False)
     monkeypatch.delenv("NUBIRA_GEOAPIFY_API_KEY", raising=False)
     monkeypatch.setattr(events, "evaluate", sample_prediction)
-    return tmp_path
+    if not (test_url := os.environ.get("NUBIRA_TEST_POSTGRES_URL")):
+        yield tmp_path
+        return
+
+    # Explicit opt-in only, using a disposable schema per test. The normal run never connects.
+    import psycopg
+    from psycopg import sql
+
+    schema = f"test_nubira_{uuid4().hex}"
+    parts = urlsplit(test_url)
+    query = dict(parse_qsl(parts.query), options=f"-c search_path={schema}")
+    with psycopg.connect(test_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        monkeypatch.setenv("DATABASE_URL", parts._replace(query=urlencode(query, quote_via=quote)).geturl())
+        try:
+            yield tmp_path
+        finally:
+            admin.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
 def messages(folder, subject, recipient):
@@ -120,6 +146,42 @@ def test_weather_rejects_invalid_or_missing_data_without_fake_results(setup, mon
         assert unavailable.json() == {"detail": "El servicio de evaluación no está disponible."}
 
 
+def test_health_only_checks_local_artifacts(setup, monkeypatch):
+    with TestClient(appPowerFastAPI.app) as client:
+        monkeypatch.setenv("DATABASE_URL", "invalid://unavailable")
+        monkeypatch.setenv("MAIL_PROVIDER", "unavailable")
+        assert client.get("/health").status_code == 200
+        monkeypatch.setattr(weather_service, "BEST_MODEL_PATH", setup / "missing.pt")
+        failed = client.get("/health")
+        assert failed.status_code == 503
+        assert failed.json()["detail"] == "Artefactos de inferencia no disponibles."
+
+
+def test_cors_allows_only_configured_frontends(setup, monkeypatch):
+    vercel = "https://nubira-weather.vercel.app"
+    local = "http://localhost:3000"
+    monkeypatch.setenv("CORS_ORIGINS", f" {vercel}, {local}/ ")
+    with TestClient(appPowerFastAPI.create_app()) as client:
+        for origin in (vercel, local):
+            preflight = client.options("/events", headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            })
+            assert preflight.status_code == 200
+            assert preflight.headers["access-control-allow-origin"] == origin
+            assert preflight.headers["access-control-allow-credentials"] == "true"
+        rejected = client.options("/clima", headers={
+            "Origin": "https://unknown.example.com", "Access-Control-Request-Method": "POST",
+        })
+        assert rejected.status_code == 400
+        assert "access-control-allow-origin" not in rejected.headers
+        assert client.get("/health", headers={"Origin": vercel}).headers["access-control-allow-origin"] == vercel
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
+        appPowerFastAPI.create_app()
+
+
 def test_accounts_use_verified_links_and_revoke_sessions_on_password_reset(setup):
     email = "planificacion@example.com"
     with TestClient(appPowerFastAPI.app) as client:
@@ -138,8 +200,8 @@ def test_accounts_use_verified_links_and_revoke_sessions_on_password_reset(setup
         original_token = client.cookies.get("nubira_session")
         assert client.patch("/auth/me", json={"name": "María"}).json() == {"email": email, "name": "María", "verified": True}
         with database() as conn:
-            assert original_token != conn.execute("SELECT digest FROM sessions").fetchone()[0]
-            assert conn.execute("SELECT password_hash FROM users").fetchone()[0].startswith("$argon2id$")
+            assert original_token != conn.execute("SELECT digest FROM sessions").fetchone()["digest"]
+            assert conn.execute("SELECT password_hash FROM users").fetchone()["password_hash"].startswith("$argon2id$")
 
         recover = client.post("/auth/forgot-password", json={"email": email})
         assert recover.status_code == 202
@@ -227,6 +289,51 @@ def test_alerts_require_a_real_change_and_retry_once_available(setup, monkeypatc
         assert client.patch(f"/events/{saved['id']}", json={"alerts_enabled": False}).status_code == 200
         monkeypatch.setattr(monitor, "evaluate", lambda *a: sample_prediction(*a, rain=10, days=39))
         assert monitor.reevaluate(10) == 0
+
+
+def test_concurrent_requests_cannot_exceed_event_limit(setup, monkeypatch):
+    both_ready = Barrier(2, timeout=5)
+
+    def evaluate_together(*args):
+        both_ready.wait()
+        return sample_prediction(*args)
+
+    with TestClient(appPowerFastAPI.app) as client:
+        assert create_account(client, setup / "mail", "limit@example.com").status_code == 200
+        assert client.post("/events", json=event_request()).status_code == 201
+        with database() as conn:
+            for _ in range(98):
+                conn.execute("""
+                    INSERT INTO events (id, user_id, name, latitude, longitude, target_date, prediction,
+                                        evaluated_at, created_at)
+                    SELECT ?, user_id, name, latitude, longitude, target_date, prediction, evaluated_at, created_at
+                    FROM events LIMIT 1
+                """, (str(uuid4()),))
+        monkeypatch.setattr(events, "evaluate", evaluate_together)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(lambda _: client.post("/events", json=event_request()).status_code, range(2)))
+        assert sorted(statuses) == [201, 409]
+        assert len(client.get("/events").json()) == 100
+
+
+def test_concurrent_monitors_only_claim_an_alert_once(setup, monkeypatch):
+    both_ready = Barrier(2, timeout=5)
+    sent = []
+
+    def deliver():
+        both_ready.wait()
+        return monitor.deliver_pending()
+
+    with TestClient(appPowerFastAPI.app) as client:
+        assert create_account(client, setup / "mail", "claim@example.com").status_code == 200
+        assert client.post("/events", json=event_request(True)).status_code == 201
+        monkeypatch.setattr(monitor, "evaluate", lambda *args: sample_prediction(*args, rain=90))
+        monkeypatch.setattr(monitor, "send_mail", lambda *args, message_id: sent.append(message_id))
+        assert monitor.reevaluate(10) == 1
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [pool.submit(deliver) for _ in range(2)]
+            assert sum(result.result(timeout=10) for result in results) == 1
+        assert len(sent) == 1
 
 
 def test_optional_geocoder_is_cached_and_not_needed_for_consultation(setup, monkeypatch):
@@ -364,3 +471,18 @@ def test_monitor_stops_gracefully_between_cycles(setup):
         finally:
             if process.poll() is None:
                 process.kill()
+
+
+def test_api_runs_the_monitor_when_enabled(setup, monkeypatch):
+    started = Event()
+
+    def cycle(threshold, running, *, retry):
+        assert threshold == 10 and running() and retry
+        started.set()
+
+    monkeypatch.setenv("NUBIRA_MONITOR_INTERVAL", "60")
+    monkeypatch.setenv("NUBIRA_ALERT_THRESHOLD_PP", "10")
+    monkeypatch.setattr(monitor, "run_cycle", cycle)
+    with TestClient(appPowerFastAPI.app) as client:
+        assert started.wait(3)
+        assert client.get("/health").status_code == 200

@@ -1,2 +1,6 @@
 *.pt filter=lfs diff=lfs merge=lfs -text
 *.npz filter=lfs diff=lfs merge=lfs -text
+
+# Production binaries are small enough to include in every regular checkout.
+/artifacts/best_weather_risk_model.pt -filter -diff -merge -text
+/artifacts/climate_context.npz -filter -diff -merge -text

@@ -1,4 +1,4 @@
-"""Run periodically with `python -m monitor`, independent of web processes."""
+"""Evaluate and send alerts from the API scheduler or `python -m monitor`."""
 
 import argparse
 import json
@@ -13,9 +13,10 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from config import public_origin
 from events import timestamp
-from mailer import check_mail_config, public_origin, send_mail
-from storage import database, init_database, prune_database
+from mailer import check_mail_config, send_mail
+from storage import DatabaseUnavailable, database, init_database, prune_database
 from weather_service import PROBABILITIES, evaluate
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,11 @@ def reevaluate(threshold: float, running: Callable[[], bool] = _keep_running) ->
             if abs(round(current[field] - previous[field], 2)) >= threshold
         ]
         with database() as conn:
-            changed = conn.execute("""
+            null_equals = "IS NOT DISTINCT FROM" if conn.postgres else "IS"
+            changed = conn.execute(f"""
                 UPDATE events SET prediction = ?, evaluated_at = ?, alert_baseline = ?
                 WHERE id = ? AND alerts = 1 AND evaluated_at = ?
-                    AND alert_baseline IS ?
+                    AND alert_baseline {null_equals} ?
             """, (updated, timestamp(), updated if changes else row["alert_baseline"],
                   row["id"], row["evaluated_at"], row["alert_baseline"]))
             if changed.rowcount == 1 and changes:
@@ -81,14 +83,13 @@ def deliver_pending(running: Callable[[], bool] = _keep_running) -> int:
             break
         now = int(time.time())
         with database() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            job = conn.execute("""
+            job = conn.lock("""
                 SELECT a.*, u.email FROM alert_outbox a JOIN events e ON e.id = a.event_id
                 JOIN users u ON u.id = e.user_id
                 WHERE a.sent_at IS NULL AND a.due <= ? AND a.lease_until <= ?
                     AND e.alerts = 1 AND e.target_date > ?
                 ORDER BY a.due LIMIT 1
-            """, (now, now, date.today().isoformat())).fetchone()
+            """, (now, now, date.today().isoformat()), clause="FOR UPDATE OF a SKIP LOCKED").fetchone()
             if not job:
                 break
             lease = now + 600
@@ -111,15 +112,37 @@ def deliver_pending(running: Callable[[], bool] = _keep_running) -> int:
     return delivered
 
 
+def alert_threshold() -> float:
+    try:
+        threshold = float(os.environ.get("NUBIRA_ALERT_THRESHOLD_PP", "10"))
+        if math.isfinite(threshold) and 0.01 <= threshold <= 100:
+            return threshold
+    except ValueError:
+        pass
+    raise ValueError("NUBIRA_ALERT_THRESHOLD_PP debe estar entre 0.01 y 100.")
+
+
+def run_cycle(threshold: float, running: Callable[[], bool] = _keep_running, *, retry=False):
+    try:
+        prune_database()
+        queued, sent = reevaluate(threshold, running), deliver_pending(running)
+        logger.info("Alertas en cola: %d; enviadas: %d.", queued, sent)
+    except DatabaseUnavailable:
+        if not retry:
+            raise
+        logger.warning("No se pudo conectar con la base de datos; se reintentará en el siguiente ciclo.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interval", type=int, help="Ejecutar continuamente, a este intervalo en segundos.")
     args = parser.parse_args()
     if args.interval is not None and args.interval < 60:
         parser.error("El intervalo debe ser de al menos 60 segundos.")
-    threshold = float(os.environ.get("NUBIRA_ALERT_THRESHOLD_PP", "10"))
-    if not math.isfinite(threshold) or not 0.01 <= threshold <= 100:
-        parser.error("NUBIRA_ALERT_THRESHOLD_PP debe estar entre 0.01 y 100.")
+    try:
+        threshold = alert_threshold()
+    except ValueError as exc:
+        parser.error(str(exc))
     stopping = False
 
     def stop(*_):
@@ -135,9 +158,7 @@ def main():
     init_database()
     check_mail_config()
     while running():
-        prune_database()
-        queued, sent = reevaluate(threshold, running), deliver_pending(running)
-        logger.info("Alertas en cola: %d; enviadas: %d.", queued, sent)
+        run_cycle(threshold, running, retry=args.interval is not None)
         if args.interval is None:
             return
         deadline = time.monotonic() + args.interval

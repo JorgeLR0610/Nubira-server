@@ -36,8 +36,9 @@ def event_view(row):
     }
 
 
-def find_event(conn, event_id, owner):
-    row = conn.execute("SELECT * FROM events WHERE id = ? AND user_id = ?", (str(event_id), owner)).fetchone()
+def find_event(conn, event_id, owner, *, lock=False):
+    select = conn.lock if lock else conn.execute
+    row = select("SELECT * FROM events WHERE id = ? AND user_id = ?", (str(event_id), owner)).fetchone()
     if not row:
         raise HTTPException(404, "No encontramos ese evento.")
     return row
@@ -60,8 +61,10 @@ def create_event(body: EventCreate, user: User):
     prediction = evaluate(body.latitude, body.longitude, target).model_dump_json()
     now = timestamp()
     with database() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        count = conn.execute("SELECT count(*) FROM events WHERE user_id = ?", (user["id"],)).fetchone()[0]
+        owner = conn.lock("SELECT id FROM users WHERE id = ?", (user["id"],), clause="FOR NO KEY UPDATE").fetchone()
+        if not owner:
+            raise HTTPException(401, "Inicia sesión para continuar.")
+        count = conn.execute("SELECT count(*) AS total FROM events WHERE user_id = ?", (user["id"],)).fetchone()["total"]
         if count >= 100:
             raise HTTPException(409, "Llegaste al límite de 100 eventos. Elimina uno antes de guardar otro.")
         row = conn.execute("""
@@ -82,8 +85,7 @@ def get_event(event_id: UUID, user: User):
 @router.patch("/{event_id}")
 def update_event(event_id: UUID, body: EventUpdate, user: User):
     with database() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = find_event(conn, event_id, user["id"])
+        row = find_event(conn, event_id, user["id"], lock=True)
         alerts = bool(row["alerts"])
         baseline = row["alert_baseline"]
         if body.alerts_enabled is not None and body.alerts_enabled != alerts:

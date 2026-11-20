@@ -13,11 +13,17 @@ Thumbs.db
 
 # Archivos de entorno local / secretos
 .env
-.env.*.local
-.env.local
-.env.development.local
-.env.production.local
-.env.test.local
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite3
+*.sqlite3-*
+*.eml
+/tmp/*.db
+/workspace/*.db
 
 # Logs
 *.log
@@ -137,6 +143,7 @@ docs/_build/
 runs/
 tensorboard_logs/
 logs/
-/artifacts/
-/workspace/nubira.sqlite3*
+/artifacts/*
+!/artifacts/best_weather_risk_model.pt
+!/artifacts/climate_context.npz
 /workspace/mail/

@@ -1,57 +1,36 @@
+import logging
 import os
 import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formatdate
-from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from config import mail_settings
 
-def public_origin() -> str:
-    origin = os.environ.get("NUBIRA_PUBLIC_URL", "http://localhost:3000").rstrip("/")
-    parts = urlsplit(origin)
-    local = parts.hostname in {"localhost", "127.0.0.1", "::1"}
-    if (not parts.hostname or parts.username or parts.password or parts.path or parts.query or parts.fragment
-            or (parts.scheme != "https" and not (local and parts.scheme == "http"))):
-        raise RuntimeError("NUBIRA_PUBLIC_URL debe ser un origen HTTPS (o HTTP en localhost).")
-    return origin
+logger = logging.getLogger(__name__)
 
 
 def check_mail_config():
-    mode = os.environ.get("NUBIRA_MAIL_MODE", "disabled")
-    origin = public_origin()
-    local = urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}
-    if mode == "file" and local and os.environ.get("NUBIRA_MAIL_DIR"):
-        return
-    if mode == "smtp" and urlsplit(origin).scheme == "https":
-        sender = os.environ.get("NUBIRA_MAIL_FROM", "")
-        user, password = os.environ.get("NUBIRA_SMTP_USER"), os.environ.get("NUBIRA_SMTP_PASSWORD")
-        port = os.environ.get("NUBIRA_SMTP_PORT")
-        if (
-            os.environ.get("NUBIRA_SMTP_HOST")
-            and "." in sender.rpartition("@")[2]
-            and bool(user) == bool(password)
-            and (not port or (port.isascii() and port.isdecimal() and 1 <= int(port) <= 65535))
-        ):
-            return
-    raise RuntimeError("El servicio de correo no está configurado.")
+    return mail_settings()
 
 
 def send_mail(to: str, subject: str, body: str, message_id: str | None = None):
-    check_mail_config()
-    sender = os.environ.get("NUBIRA_MAIL_FROM", "nubira@localhost")
+    settings = check_mail_config()
+    if settings.mode == "console":
+        logger.info("Correo simulado en modo local; no se realizó ningún envío.")
+        return
     message = EmailMessage()
-    message["From"] = sender
+    message["From"] = settings.sender
     message["To"] = to
     message["Subject"] = subject
     message["Date"] = formatdate(usegmt=True)
     message_id = message_id or uuid4().hex
-    message["Message-ID"] = f"<{message_id}.nubira@{urlsplit(public_origin()).hostname}>"
+    message["Message-ID"] = f"<{message_id}.nubira@{urlsplit(settings.origin).hostname}>"
     message.set_content(body)
 
-    if os.environ.get("NUBIRA_MAIL_MODE") == "file":
-        outbox = Path(os.environ["NUBIRA_MAIL_DIR"])
+    if (outbox := settings.directory) is not None:
         outbox.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = outbox / f"{message_id}.eml"
         if path.exists():
@@ -66,15 +45,11 @@ def send_mail(to: str, subject: str, body: str, message_id: str | None = None):
             temp.unlink(missing_ok=True)
         return
 
-    host = os.environ["NUBIRA_SMTP_HOST"]
     context = ssl.create_default_context()
-    implicit_tls = os.environ.get("NUBIRA_SMTP_IMPLICIT_TLS") == "1"
-    port = int(os.environ.get("NUBIRA_SMTP_PORT") or ("465" if implicit_tls else "587"))
-    client = (smtplib.SMTP_SSL(host, port, context=context, timeout=15) if implicit_tls
-              else smtplib.SMTP(host, port, timeout=15))
+    client = (smtplib.SMTP_SSL(settings.host, settings.port, context=context, timeout=15) if settings.implicit_tls
+              else smtplib.SMTP(settings.host, settings.port, timeout=15))
     with client:
-        if not implicit_tls:
+        if not settings.implicit_tls:
             client.starttls(context=context)
-        if username := os.environ.get("NUBIRA_SMTP_USER"):
-            client.login(username, os.environ["NUBIRA_SMTP_PASSWORD"])
+        client.login(settings.user, settings.password)
         client.send_message(message)

@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-requests
-pandas
-scikit-learn
-numpy
-xarray

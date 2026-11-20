@@ -1,26 +1,40 @@
-"""Recover the checked-in Git LFS artifacts from the project's public mirror."""
+"""Verify the packaged inference artifacts or recover them explicitly in development."""
 
+import argparse
 import hashlib
 import tempfile
 from pathlib import Path
 from urllib.request import urlopen
 
+from config import ARTIFACT_DIR
+
 BASE = "https://huggingface.co/spaces/jesus1558/Nubira/resolve/main/"
-DEST = Path(__file__).resolve().parent / "artifacts"
+DEST = ARTIFACT_DIR
 ARTIFACTS = {
     "best_weather_risk_model.pt": (433623, "234e65463355ef7934fff6d20d60387c1fd173c855153e3ed54172e79544e42b"),
     "climate_context.npz": (19364134, "6e7ede881b621805537cd68feddc884534546991b10b33a1741864d54e49b5b3"),
 }
 
 
+def valid_artifact(path: Path, size: int, expected: str) -> bool:
+    if not path.is_file() or path.stat().st_size != size:
+        return False
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest() == expected
+
+
+def verify():
+    for name, (size, expected) in ARTIFACTS.items():
+        if not valid_artifact(DEST / name, size, expected):
+            raise RuntimeError(f"Artefacto local ausente o inválido: {name}.")
+        print(f"{name}: verificado.")
+
+
 def fetch():
     DEST.mkdir(exist_ok=True)
     for name, (size, expected) in ARTIFACTS.items():
         destination = DEST / name
-        checked_in = DEST.parent / name
-        active = destination if destination.exists() else checked_in
-        if (active.is_file() and active.stat().st_size == size and
-                hashlib.sha256(active.read_bytes()).hexdigest() == expected):
+        if valid_artifact(destination, size, expected):
             print(f"{name}: verificado.")
             continue
         digest = hashlib.sha256()
@@ -45,4 +59,6 @@ def fetch():
 
 
 if __name__ == "__main__":
-    fetch()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="Verifica los archivos locales sin usar la red.")
+    verify() if parser.parse_args().check else fetch()

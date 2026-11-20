@@ -10,7 +10,8 @@ from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
-from mailer import check_mail_config, public_origin, send_mail
+from config import public_origin
+from mailer import check_mail_config, send_mail
 from storage import database
 
 router = APIRouter(prefix="/auth", tags=["accounts"])
@@ -66,15 +67,16 @@ def digest(value: str) -> str:
 def rate_limit(action: str, identity: str, limit: int, interval: int):
     now = int(time.time())
     with database() as conn:
-        count, expiry = conn.execute("""
+        row = conn.execute("""
             INSERT INTO rate_limits VALUES (?, 1, ?)
             ON CONFLICT(key) DO UPDATE SET
-                count = CASE WHEN expires <= ? THEN 1 ELSE min(count + 1, ?) END,
-                expires = CASE WHEN expires <= ? THEN excluded.expires ELSE expires END
+                count = CASE WHEN rate_limits.expires <= ? THEN 1
+                    WHEN rate_limits.count < ? THEN rate_limits.count + 1 ELSE ? END,
+                expires = CASE WHEN rate_limits.expires <= ? THEN excluded.expires ELSE rate_limits.expires END
             RETURNING count, expires
-        """, (digest(f"{action}:{identity}"), now + interval, now, limit + 1, now)).fetchone()
-    if count > limit:
-        raise HTTPException(429, "Demasiados intentos. Intenta más tarde.", headers={"Retry-After": str(expiry - now)})
+        """, (digest(f"{action}:{identity}"), now + interval, now, limit + 1, limit + 1, now)).fetchone()
+    if row["count"] > limit:
+        raise HTTPException(429, "Demasiados intentos. Intenta más tarde.", headers={"Retry-After": str(row["expires"] - now)})
 
 
 def require_email_service():
@@ -121,9 +123,18 @@ def _send_account_link(user_id: int, email: str, purpose: str):
 
 
 def _consume_token(conn, token: str, purpose: str) -> int:
+    token_digest = digest(token)
+    # Serialize credential changes by user before deleting their tokens or sessions.
+    owner = conn.lock("""
+        SELECT id FROM users WHERE id = (
+            SELECT user_id FROM account_tokens WHERE digest = ? AND purpose = ? AND expires > ?
+        )
+    """, (token_digest, purpose, int(time.time())), clause="FOR NO KEY UPDATE").fetchone()
+    if not owner:
+        raise HTTPException(400, "El enlace ya no es válido. Solicita uno nuevo.")
     row = conn.execute("""
         DELETE FROM account_tokens WHERE digest = ? AND purpose = ? AND expires > ? RETURNING user_id
-    """, (digest(token), purpose, int(time.time()))).fetchone()
+    """, (token_digest, purpose, int(time.time()))).fetchone()
     if not row:
         raise HTTPException(400, "El enlace ya no es válido. Solicita uno nuevo.")
     return row["user_id"]
@@ -202,11 +213,12 @@ def login(body: Credentials, response: Response):
     token = secrets.token_urlsafe(32)
     now = int(time.time())
     with database() as conn:
-        inserted = conn.execute("""
-            INSERT INTO sessions SELECT ?, id, ? FROM users WHERE id = ? AND password_hash = ?
-        """, (digest(token), now + SESSION_AGE, row["id"], row["password_hash"]))
-        if inserted.rowcount != 1:
+        original = conn.lock("SELECT password_hash FROM users WHERE id = ?", (row["id"],),
+                             clause="FOR NO KEY UPDATE").fetchone()
+        if not original or original["password_hash"] != row["password_hash"]:
             raise HTTPException(401, "La contraseña cambió. Intenta iniciar sesión otra vez.")
+        conn.execute("INSERT INTO sessions (digest, user_id, expires) VALUES (?, ?, ?)",
+                     (digest(token), row["id"], now + SESSION_AGE))
         conn.execute("DELETE FROM rate_limits WHERE key = ?", (digest(f"login:{email}"),))
     response.set_cookie(COOKIE, token, max_age=SESSION_AGE, httponly=True,
                         secure=public_origin().startswith("https://"), samesite="lax")
@@ -270,9 +282,9 @@ def change_password(body: ChangePasswordPayload, user: User, response: Response)
         raise HTTPException(400, "La contraseña actual no es correcta.")
     new_hash = hasher.hash(body.password)
     with database() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        original = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user["id"],)).fetchone()
-        if original["password_hash"] != user["password_hash"]:
+        original = conn.lock("SELECT password_hash FROM users WHERE id = ?", (user["id"],),
+                             clause="FOR NO KEY UPDATE").fetchone()
+        if not original or original["password_hash"] != user["password_hash"]:
             raise HTTPException(401, "La contraseña cambió. Vuelve a iniciar sesión.")
         _replace_password(conn, user["id"], new_hash)
     _clear_session(response)

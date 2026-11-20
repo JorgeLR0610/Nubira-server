@@ -7,4 +7,4 @@ netCDF4>=1.6.5
 dask>=2024.1.0
 scikit-learn>=1.4.0
 tqdm>=4.66.0
-
+psycopg[binary]>=3.2,<4

@@ -67,7 +67,7 @@ def predict_daily_risk_probabilities(
 
     if not BEST_MODEL_PATH.exists() or not CONTEXT_PATH.exists():
         raise FileNotFoundError(
-            "No se encontraron los archivos del modelo entrenado. Ejecuta primero download_data.py y train.py."
+            "No se encontraron los artefactos de inferencia locales en las rutas configuradas."
         )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -131,4 +131,3 @@ if __name__ == "__main__":
     print("Pronóstico probabilístico diario:")
     for clave, valor in resultado.items():
         print(f"  {clave}: {valor}")
-

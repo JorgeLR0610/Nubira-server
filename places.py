@@ -151,5 +151,8 @@ def search(body: Search):
         raise HTTPException(502, "No pudimos buscar ese lugar. Puedes usar el mapa o ingresar las coordenadas.") from exc
     with database() as conn:
         conn.execute("DELETE FROM place_cache WHERE expires <= ?", (now,))
-        conn.execute("INSERT OR REPLACE INTO place_cache VALUES (?, ?, ?)", (key, json.dumps(results), now + 86400))
+        conn.execute("""
+            INSERT INTO place_cache (key, response, expires) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET response = excluded.response, expires = excluded.expires
+        """, (key, json.dumps(results), now + 86400))
     return results

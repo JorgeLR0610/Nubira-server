@@ -56,7 +56,10 @@ PROBABILITIES = {
 
 
 def artifacts_ready() -> bool:
-    return all(is_zipfile(path) for path in (BEST_MODEL_PATH, CONTEXT_PATH))
+    try:
+        return all(path.stat().st_size > 1024 and is_zipfile(path) for path in (BEST_MODEL_PATH, CONTEXT_PATH))
+    except OSError:
+        return False
 
 
 def evaluate(latitude: float, longitude: float, target_date: date) -> Prediction:
