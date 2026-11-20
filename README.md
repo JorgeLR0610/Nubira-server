@@ -8,82 +8,83 @@ pinned: false
 license: mit
 ---
 
-# API, inferencia y alertas
+# Nubira-server
 
-Requiere Python 3.12. El entrenamiento y el servicio tienen dependencias separadas. Para iniciar la API sin entrenar:
+Backend de Nubira Weather, una aplicación para evaluar riesgos climatológicos antes de un evento al aire libre. La consulta es pública; guardar eventos y suscribirse a alertas requiere una cuenta con correo verificado. La evaluación es climatológica: no sustituye un pronóstico meteorológico para el día del evento.
+
+- **Web:** [nubira-weather.vercel.app](https://nubira-weather.vercel.app) · [Repositorio del frontend](https://github.com/JesusPichardo15/NubiraWeather)
+- **API:** [api.nubiraweather.date](https://api.nubiraweather.date) · [Estado de la API](https://api.nubiraweather.date/health)
+
+## Producción
+
+El frontend en Vercel llama a la API desde su servidor. En una VM Linux de **AWS Lightsail de 2 GB**, [Docker Compose](docker-compose.yml) ejecuta Caddy y un único contenedor FastAPI con PyTorch CPU y el monitor de alertas. [Caddy](Caddyfile) obtiene y renueva el certificado de Let's Encrypt y redirige HTTP a HTTPS. El puerto interno `8000` no se publica; Uvicorn solo confía en las cabeceras reenviadas por Caddy.
+
+La persistencia usa **Neon (PostgreSQL)** mediante `DATABASE_URL`, con los parámetros TLS de Neon. La API crea las tablas de forma idempotente al arrancar y abre conexiones por operación. La imagen requiere PostgreSQL por defecto: un error de conexión no provoca un cambio a SQLite. Los correos de verificación, restablecimiento y alertas se envían con **Amazon SES por SMTP STARTTLS** (puerto `587`). Si SES está en el sandbox, los destinatarios de prueba también deben estar verificados.
+
+### Operación en Lightsail
+
+Para recrear el entorno, usa una IP pública estática y un registro DNS `A` de `api.nubiraweather.date` que apunte a la VM. Abre **TCP `80` y `443`** en el firewall; **UDP `443`** es opcional para HTTP/3. No abras `8000` ni dejes un registro `AAAA` que apunte a otro servidor.
+
+Guarda las variables en un `.env` privado (permisos `600`), con [`.env.example`](.env.example) como referencia. Además de `DATABASE_URL`, configura `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` y `MAIL_FROM`. Usa el endpoint y las credenciales de la misma región de SES. `NUBIRA_API_DOMAIN` identifica la API; `FRONTEND_URL` y `CORS_ORIGINS` deben usar el origen de la **web** (`https://nubira-weather.vercel.app`), no el de la API.
+
+Para actualizar, desde el clon del backend en la VM:
+
+```sh
+git pull --ff-only
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+curl -fsS https://api.nubiraweather.date/health
+```
+
+Usa `docker compose logs --tail=100 -f api caddy` para seguir los logs y `docker compose down` para detener los servicios. **No añadas `-v`**: borraría los volúmenes que conservan los certificados y la configuración de Caddy. Si la subred de Compose se solapa con una red de la VM, ajusta la subred y su rango dinámico y mantén la IP fija de Caddy fuera de ese rango y sincronizada con `FORWARDED_ALLOW_IPS`.
+
+`GET /health` devuelve `200` si los artefactos de inferencia están disponibles y `503` si faltan o no son válidos. No verifica Neon ni SES. Después de un cambio de despliegue, comprueba también una consulta sin cuenta, la entrega del enlace de verificación, el inicio de sesión y el guardado de un evento desde Vercel.
+
+## Desarrollo local
+
+Requiere Python 3.12. El entrenamiento y la API tienen dependencias separadas. Para iniciar la API sin entrenar ni conectarte a servicios de producción:
 
 ```sh
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-api.txt
-pip install 'torch>=2.6,<3' --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements-api.txt
+python -m pip install 'torch>=2.6,<3' --index-url https://download.pytorch.org/whl/cpu
 python fetch_artifacts.py --check
-MAIL_PROVIDER=file NUBIRA_MAIL_DIR="$PWD/workspace/mail" \
-  NUBIRA_BIND_HOST=127.0.0.1 OMP_NUM_THREADS=2 python start.py
+DATABASE_URL= NUBIRA_REQUIRE_POSTGRES=0 FRONTEND_URL=http://localhost:3000 \
+  MAIL_PROVIDER=file NUBIRA_MAIL_DIR="$PWD/workspace/mail" \
+  NUBIRA_BIND_HOST=127.0.0.1 PORT=8000 OMP_NUM_THREADS=2 python start.py
 ```
 
-La API escucha en el puerto `8000` por defecto. Si inicias el frontend local por separado, configura `NUBIRA_API_URL=http://127.0.0.1:8000` en `NubiraWeather/.env.local`.
+La API escucha en el puerto `8000` por defecto. En `NubiraWeather/.env.local`, establece `NUBIRA_API_URL=http://127.0.0.1:8000`. Si ejecutas Python directamente, exporta las variables en el entorno: `start.py` no carga `.env` automáticamente.
 
-Los dos binarios de producción ya están en `artifacts/`, sin depender de Git LFS. `fetch_artifacts.py --check` valida tamaño y SHA-256 sin red. El script sin `--check` queda como recuperación explícita en desarrollo; no se ejecuta al arrancar. Puedes montar otros artefactos de confianza con `NUBIRA_MODEL_PATH` y `NUBIRA_CLIMATE_CONTEXT_PATH`. `/health` devuelve `200` si están disponibles y `503` si faltan o son punteros Git LFS; no comprueba Neon ni SES. `/clima` requiere una fecha futura.
+Sin `DATABASE_URL`, el servidor local usa SQLite (`workspace/nubira.sqlite3` o `NUBIRA_DB_PATH`). Con `MAIL_PROVIDER=file`, los enlaces de cuenta llegan como archivos `.eml` a `NUBIRA_MAIL_DIR`; `console` simula el envío sin imprimir destinatarios ni enlaces. No publiques la bandeja ni guardes credenciales en Git.
 
-Con `DATABASE_URL` se usa PostgreSQL, se abre una conexión por operación y se crean las tablas al arrancar. Sin la variable, solo para desarrollo y pruebas, se usa SQLite (`workspace/nubira.sqlite3` o `NUBIRA_DB_PATH`). La imagen exige PostgreSQL por defecto y no cambia a SQLite ante un fallo de conexión. No se importan los datos del prototipo.
+### Inferencia y lugares
 
-### Autocompletado de direcciones
+El modelo y su contexto están versionados directamente en [`artifacts/`](artifacts/) y se empaquetan en la imagen. `python fetch_artifacts.py --check` verifica tamaño y SHA-256 sin red. El script sin `--check` sirve para la recuperación manual en desarrollo; el arranque no descarga archivos. Para usar otros artefactos de confianza, configura `NUBIRA_MODEL_PATH` y `NUBIRA_CLIMATE_CONTEXT_PATH`. `POST /clima` acepta fechas futuras.
 
-Configura `NUBIRA_GEOAPIFY_API_KEY` solo en el entorno de la API y reiníciala. Las sugerencias se consultan en español, priorizan México sin excluir otros países y tienen un límite compartido de 1.000 solicitudes al proveedor por ventana de 24 horas (además del límite de ráfaga). Las direcciones parciales se envían al proveedor y la API no las guarda. Sin clave siguen disponibles el mapa y la entrada manual. La búsqueda opcional compatible con Nominatim conserva su modo de envío explícito: nunca se usa para el autocompletado.
+`NUBIRA_GEOAPIFY_API_KEY` habilita el autocompletado y la dirección más cercana al seleccionar un punto. Ambas funciones comparten el límite de 1.000 solicitudes por ventana de 24 horas, además del límite de ráfaga. Las consultas se envían a Geoapify y la API no guarda las direcciones parciales. Sin clave siguen disponibles el mapa y la entrada manual de coordenadas. La búsqueda manual opcional compatible con Nominatim no interviene en el autocompletado.
 
-Con la misma clave, un clic del mapa busca la dirección más cercana. La API comparte el límite de solicitudes con el autocompletado y solo devuelve una etiqueta (o `null` si no hay coincidencia); el punto original se utiliza para la evaluación.
+### Monitor de alertas
 
-### Correo y reevaluación
-
-Las variables están documentadas en [`.env.example`](.env.example); expórtalas desde el entorno o configúralas en Compose. `file` guarda mensajes en una bandeja local para probar los enlaces. `console` simula el envío sin imprimir el destinatario ni los enlaces. `smtp` requiere `FRONTEND_URL` con HTTPS, un remitente autorizado y credenciales del proveedor. Por defecto usa STARTTLS en el puerto 587. No subas credenciales ni la bandeja de correo al repositorio.
-
-La imagen de Lightsail ejecuta el monitor dentro de la API con un único proceso servidor. En local puedes activarlo con `NUBIRA_MONITOR_INTERVAL=900` o lanzarlo manualmente con el mismo entorno, base de datos y artefactos que la API:
+En producción, el monitor integrado se ejecuta cada 900 segundos por defecto. En local puedes activarlo con `NUBIRA_MONITOR_INTERVAL=900` al iniciar la API, o ejecutarlo por separado **con el mismo entorno, base de datos y artefactos**:
 
 ```sh
-TZ=UTC MAIL_PROVIDER=file NUBIRA_MAIL_DIR="$PWD/workspace/mail" \
+TZ=UTC DATABASE_URL= NUBIRA_REQUIRE_POSTGRES=0 FRONTEND_URL=http://localhost:3000 \
+  MAIL_PROVIDER=file NUBIRA_MAIL_DIR="$PWD/workspace/mail" \
   OMP_NUM_THREADS=2 python -m monitor --interval 900
 ```
 
-Sin `--interval` se ejecuta un solo ciclo (útil en cron). El umbral por defecto es 10 **puntos porcentuales** (`NUBIRA_ALERT_THRESHOLD_PP`); se compara con la evaluación inicial o la que generó el último aviso. Los días restantes no activan avisos; el modelo no incorpora un pronóstico que vaya cambiando a medida que se acerca el evento. La cola persiste y aplica reintentos; los avisos llevan identificador estable. Como con cualquier SMTP, un fallo tras la aceptación remota y antes de guardar la confirmación puede causar reenvío. El monitor no notifica eventos vencidos.
+Sin `--interval` se ejecuta un solo ciclo. Activa solo un monitor por entorno. El umbral de aviso es de 10 **puntos porcentuales** por defecto (`NUBIRA_ALERT_THRESHOLD_PP`), respecto a la evaluación inicial o a la que generó el último aviso. No hay avisos por el mero paso de los días ni por eventos vencidos. La cola persiste y reintenta los envíos fallidos.
 
-### Despliegue manual: Lightsail, Neon, SES y Vercel
+## Pruebas
 
-#### VM Linux con Caddy (HTTPS automático)
-
-1. Crea una VM Linux de **2 GB** en Lightsail con Docker y el complemento Docker Compose. Asocia una **IPv4 pública estática** y crea el registro DNS `A` de `api.nubiraweather.date` apuntando a ella. No dejes un registro `AAAA` si IPv6 no apunta a la misma VM.
-2. En el firewall de Lightsail (y en el de la VM si está activo), permite **TCP 80 y 443** desde internet. **UDP 443** es opcional para HTTP/3. No abras el puerto `8000`; solo Caddy publica puertos.
-3. Desde `Nubira-server`, crea un `.env` privado a partir de [`.env.example`](.env.example) y edítalo antes de iniciar. Configura `NUBIRA_API_DOMAIN=api.nubiraweather.date`, la URL de Neon (`DATABASE_URL`) con sus parámetros TLS y `MAIL_PROVIDER=smtp` con `SMTP_HOST`, `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS` y `MAIL_FROM`. Usa el endpoint y las credenciales de la misma región de SES. Si SES está en el sandbox, verifica también los correos destinatarios de la demo. `FRONTEND_URL` y `CORS_ORIGINS` deben referirse al **origen de la web**, no al de la API.
+En el entorno local con PyTorch CPU:
 
 ```sh
-# Si .env no existe todavía:
-test -e .env || install -m 600 .env.example .env
-chmod 600 .env
-# Tras configurar .env:
-docker compose config --quiet
-docker compose up -d --build
-docker compose logs -f
+python -m pip install -r requirements-test.txt
+TZ=UTC OMP_NUM_THREADS=2 python -m pytest
 ```
 
-Caddy obtiene y renueva el certificado de Let's Encrypt y redirige HTTP a HTTPS. Para detener los servicios, usa `docker compose down` **sin `-v`** para conservar los certificados. Si la subred `172.30.64.0/28` coincide con una red existente de la VM, ajusta la subred y su rango dinámico en `docker-compose.yml`. Mantén la IP fija de Caddy fuera de ese rango y usa la misma IP en `FORWARDED_ALLOW_IPS`.
-
-Comprueba `curl -fsS https://api.nubiraweather.date/health`. Cuando responda `200` con un certificado válido, configura `NUBIRA_API_URL=https://api.nubiraweather.date` en Vercel y vuelve a desplegar el frontend. Si ya usabas el mismo dominio para la web, no cambies `NUBIRA_PUBLIC_URL`: debe seguir coincidiendo con `FRONTEND_URL`. Finalmente, prueba una consulta pública, la llegada del correo de verificación, el inicio de sesión y el guardado de un evento.
-
-#### Alternativa: Lightsail Container Service (sin Caddy)
-
-Desde `Nubira-server`, con Docker, AWS CLI y el complemento `lightsailctl` instalados, compila y sube la imagen a un servicio que ya hayas creado:
-
-```sh
-docker build --platform linux/amd64 --provenance=false -t nubira-api:demo .
-aws lightsail push-container-image --region REGION --service-name SERVICIO \
-  --label nubira-api --image nubira-api:demo
-```
-
-1. Crea el despliegue con la imagen que devuelve el comando, escala **1**, puerto **HTTP 8000** y ruta de salud **`/health`** (código `200`). El endpoint público de Lightsail ofrece HTTPS. El plan **Medium** da 2 GB; consulta [el coste actual](https://aws.amazon.com/lightsail/pricing/) antes de crearlo.
-2. En las variables del contenedor, añade la URL de Neon (`DATABASE_URL`) con los parámetros TLS que proporciona Neon. Para el correo usa `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS` y `MAIL_FROM`. El endpoint SMTP y las credenciales deben ser de la misma región de SES. Si SES está en el sandbox, verifica también los correos destinatarios de la demo.
-3. Configura `FRONTEND_URL` con el origen público que usarán los enlaces de correo y `CORS_ORIGINS` con los orígenes exactos permitidos. En Vercel configura `NUBIRA_PUBLIC_URL` con el mismo origen público y `NUBIRA_API_URL` con el endpoint HTTPS de Lightsail; después vuelve a desplegar el frontend.
-4. Comprueba `/health`, una consulta sin cuenta, la llegada del correo de verificación, el acceso, un evento guardado tras reiniciar el contenedor y el restablecimiento de contraseña. Activa alertas en un evento futuro: el correo de alerta solo se envía si cambia lo suficiente la evaluación climatológica.
-
-### Pruebas
-
-Instala `requirements-test.txt` en el entorno que ya tiene PyTorch CPU y ejecuta `TZ=UTC OMP_NUM_THREADS=2 python -m pytest`. La suite por defecto usa SQLite temporal y proveedores simulados. GitHub Actions repite la misma suite con PostgreSQL local a través de `NUBIRA_TEST_POSTGRES_URL`. Para repetir esa prueba localmente usa solo una base descartable: la suite crea y borra un esquema propio por prueba. No se usa Neon ni SES reales.
+La suite usa SQLite temporal y proveedores simulados. [GitHub Actions](.github/workflows/checks.yml) la repite con PostgreSQL local mediante `NUBIRA_TEST_POSTGRES_URL`. Si reproduces esa variante, usa solo una base de pruebas descartable: la suite crea y elimina un esquema por prueba. No se usa Neon ni SES reales.
