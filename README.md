@@ -49,6 +49,28 @@ Sin `--interval` se ejecuta un solo ciclo (útil en cron). El umbral por defecto
 
 ### Despliegue manual: Lightsail, Neon, SES y Vercel
 
+#### VM Linux con Caddy (HTTPS automático)
+
+1. Crea una VM Linux de **2 GB** en Lightsail con Docker y el complemento Docker Compose. Asocia una **IPv4 pública estática** y crea el registro DNS `A` de `api.nubiraweather.date` apuntando a ella. No dejes un registro `AAAA` si IPv6 no apunta a la misma VM.
+2. En el firewall de Lightsail (y en el de la VM si está activo), permite **TCP 80 y 443** desde internet. **UDP 443** es opcional para HTTP/3. No abras el puerto `8000`; solo Caddy publica puertos.
+3. Desde `Nubira-server`, crea un `.env` privado a partir de [`.env.example`](.env.example) y edítalo antes de iniciar. Configura `NUBIRA_API_DOMAIN=api.nubiraweather.date`, la URL de Neon (`DATABASE_URL`) con sus parámetros TLS y `MAIL_PROVIDER=smtp` con `SMTP_HOST`, `SMTP_PORT=587`, `SMTP_USER`, `SMTP_PASS` y `MAIL_FROM`. Usa el endpoint y las credenciales de la misma región de SES. Si SES está en el sandbox, verifica también los correos destinatarios de la demo. `FRONTEND_URL` y `CORS_ORIGINS` deben referirse al **origen de la web**, no al de la API.
+
+```sh
+# Si .env no existe todavía:
+test -e .env || install -m 600 .env.example .env
+chmod 600 .env
+# Tras configurar .env:
+docker compose config --quiet
+docker compose up -d --build
+docker compose logs -f
+```
+
+Caddy obtiene y renueva el certificado de Let's Encrypt y redirige HTTP a HTTPS. Para detener los servicios, usa `docker compose down` **sin `-v`** para conservar los certificados. Si la subred `172.30.64.0/28` coincide con una red existente de la VM, ajusta la subred y su rango dinámico en `docker-compose.yml`. Mantén la IP fija de Caddy fuera de ese rango y usa la misma IP en `FORWARDED_ALLOW_IPS`.
+
+Comprueba `curl -fsS https://api.nubiraweather.date/health`. Cuando responda `200` con un certificado válido, configura `NUBIRA_API_URL=https://api.nubiraweather.date` en Vercel y vuelve a desplegar el frontend. Si ya usabas el mismo dominio para la web, no cambies `NUBIRA_PUBLIC_URL`: debe seguir coincidiendo con `FRONTEND_URL`. Finalmente, prueba una consulta pública, la llegada del correo de verificación, el inicio de sesión y el guardado de un evento.
+
+#### Alternativa: Lightsail Container Service (sin Caddy)
+
 Desde `Nubira-server`, con Docker, AWS CLI y el complemento `lightsailctl` instalados, compila y sube la imagen a un servicio que ya hayas creado:
 
 ```sh

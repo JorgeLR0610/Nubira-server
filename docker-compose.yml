@@ -1,0 +1,46 @@
+name: nubira-lightsail
+
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      PORT: "8000"
+      NUBIRA_BIND_HOST: "0.0.0.0"
+      FORWARDED_ALLOW_IPS: "172.30.64.2" # Only Caddy's address on the deployment bridge.
+    expose:
+      - "8000"
+    restart: unless-stopped
+    networks:
+      - proxy
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      NUBIRA_API_DOMAIN: ${NUBIRA_API_DOMAIN:-api.nubiraweather.date}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
+    networks:
+      proxy:
+        ipv4_address: 172.30.64.2
+
+networks:
+  proxy:
+    # An unpublished API port prevents public ingress; both services still need outbound access.
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.64.0/28
+          ip_range: 172.30.64.8/29 # Keep the static proxy address outside the dynamic pool.
+
+volumes:
+  caddy_data:
+  caddy_config:

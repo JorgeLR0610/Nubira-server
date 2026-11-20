@@ -19,6 +19,8 @@ venv/
 **/*.eml
 .git/
 .gitignore
+Caddyfile
+docker-compose.yml
 *.csv
 *.pth
 *.pt

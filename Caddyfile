@@ -1,0 +1,8 @@
+{
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+{$NUBIRA_API_DOMAIN:api.nubiraweather.date} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}

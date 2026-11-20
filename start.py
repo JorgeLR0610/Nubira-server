@@ -18,4 +18,11 @@ if __name__ == "__main__":
     host = os.environ.get("NUBIRA_BIND_HOST", "0.0.0.0")
     logging.basicConfig(level=logging.INFO)
     print(f"Iniciando Nubira Weather Risk API en {host}:{port}...")
-    uvicorn.run("appPowerFastAPI:app", host=host, port=port, workers=1)
+    uvicorn.run(
+        "appPowerFastAPI:app",
+        host=host,
+        port=port,
+        workers=1,
+        proxy_headers=True,
+        forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1,::1"),
+    )
